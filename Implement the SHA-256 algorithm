@@ -1,0 +1,171 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <regex>
+#include <iterator>
+#include <cstdint>
+
+inline uint32_t rotr(uint32_t x, uint32_t n) {
+    return (x >> n) | (x << (32 - n));
+}
+
+const uint32_t keyConst[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+
+std::vector<uint8_t> sha256(const std::vector<uint8_t>& input) {
+    uint32_t h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+    uint32_t h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+    std::vector<uint8_t> data = input;
+    uint64_t bitlen = static_cast<uint64_t>(data.size()) * 8;
+    data.push_back(0x80);
+    while ((data.size() % 64) != 56) data.push_back(0x00);
+    for (int i = 7; i >= 0; --i)
+        data.push_back(static_cast<uint8_t>((bitlen >> (8 * i)) & 0xff));
+    for (size_t i = 0; i < data.size(); i += 64) {
+        uint32_t w[64];
+        for (int j = 0; j < 16; ++j) {
+            size_t idx = i + 4 * j;
+            w[j] = (data[idx] << 24) | (data[idx + 1] << 16) | 
+                   (data[idx + 2] << 8) | data[idx + 3];
+        }
+        for (int j = 16; j < 64; ++j) {
+            uint32_t s0 = rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ (w[j - 15] >> 3);
+            uint32_t s1 = rotr(w[j - 2], 17) ^ rotr(w[j - 2], 19) ^ (w[j - 2] >> 10);
+            w[j] = w[j - 16] + s0 + w[j - 7] + s1;
+        }
+        uint32_t a = h0, b = h1, c = h2, d = h3;
+        uint32_t e = h4, f = h5, g = h6, h = h7;
+        for (int j = 0; j < 64; ++j) {
+            uint32_t S1  = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            uint32_t ch  = (e & f) ^ ((~e) & g);
+            uint32_t temp1 = h + S1 + ch + keyConst[j] + w[j];
+            uint32_t S0  = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            uint32_t temp2 = S0 + maj;
+            h = g; g = f; f = e;
+            e = d + temp1;
+            d = c; c = b; b = a;
+            a = temp1 + temp2;
+        }
+        h0 += a; h1 += b; h2 += c; h3 += d;
+        h4 += e; h5 += f; h6 += g; h7 += h;
+    }
+    std::vector<uint8_t> out(32);
+    uint32_t hs[8] = {h0, h1, h2, h3, h4, h5, h6, h7};
+    for (int i = 0; i < 8; ++i) {
+        out[4 * i + 0] = static_cast<uint8_t>((hs[i] >> 24) & 0xff);
+        out[4 * i + 1] = static_cast<uint8_t>((hs[i] >> 16) & 0xff);
+        out[4 * i + 2] = static_cast<uint8_t>((hs[i] >> 8) & 0xff);
+        out[4 * i + 3] = static_cast<uint8_t>(hs[i] & 0xff);
+    }
+    return out;
+}
+
+std::string hexify(const std::vector<uint8_t>& v) {
+    static const char* digits = "0123456789abcdef";
+    std::string s;
+    s.reserve(v.size() * 2);
+    for (uint8_t b : v) {
+        s.push_back(digits[b >> 4]);
+        s.push_back(digits[b & 0x0F]);
+    }
+    return s;
+}
+
+std::string strip_html(const std::string& in) {
+    std::string t = in;
+    t = std::regex_replace(t, std::regex("<script[\\s\\S]*?</script>", std::regex::icase), " ");
+    t = std::regex_replace(t, std::regex("<style[\\s\\S]*?</style>", std::regex::icase), " ");
+    t = std::regex_replace(t, std::regex("<[^>]+>"), " ");
+    t = std::regex_replace(t, std::regex("[ \\t\\r\\f\\v]+"), " ");
+    if (!t.empty()) {
+        size_t a = t.find_first_not_of(" \n");
+        size_t b = t.find_last_not_of(" \n");
+        if (a != std::string::npos)
+            t = t.substr(a, b - a + 1);
+        else
+            t.clear();
+    }
+    return t;
+}
+
+bool read_file(const std::string& path, std::vector<uint8_t>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.seekg(0, std::ios::end);
+    std::streampos n = f.tellg();
+    f.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(n));
+    if (n > 0) f.read(reinterpret_cast<char*>(out.data()), n);
+    return true;
+}
+
+int main(int argc, char** argv) {
+    bool strip = false, selftest = false;
+    std::string filepath;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--file" && i + 1 < argc) filepath = argv[++i];
+        else if (a == "--strip-html") strip = true;
+        else if (a == "--selftest") selftest = true;
+        else if (a == "-h" || a == "--help") {
+            std::cout << "Usage: " << argv[0]
+                      << " [--file path] [--strip-html] [--selftest]\n";
+            return 0;
+        }
+    }
+    if (selftest) {
+        struct TestVector { std::string msg, hash; };
+        std::vector<TestVector> tests = {
+            {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+            {"abc","ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+            {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"}
+        };
+        bool ok = true;
+        for (auto& t : tests) {
+            std::vector<uint8_t> v(t.msg.begin(), t.msg.end());
+            std::string got = hexify(sha256(v));
+            if (got != t.hash) {
+                ok = false;
+                std::cerr << "FAIL for \"" << t.msg << "\"\n"
+                          << " got: " << got << "\n"
+                          << " exp: " << t.hash << "\n";
+            }
+        }
+        std::cout << (ok ? "PASS" : "FAIL") << '\n';
+        return ok ? 0 : 1;
+    }
+    std::vector<uint8_t> data;
+    if (!filepath.empty()) {
+        if (!read_file(filepath, data)) {
+            std::cerr << "Could not read file.\n";
+            return 1;
+        }
+        if (strip) {
+            std::string s(reinterpret_cast<const char*>(data.data()), data.size());
+            s = strip_html(s);
+            data.assign(s.begin(), s.end());
+        }
+    } else {
+        std::string s((std::istreambuf_iterator<char>(std::cin)),
+                      std::istreambuf_iterator<char>());
+        if (s.empty()) {
+            std::cerr << "No input. Paste text or use --file.\n";
+            return 1;
+        }
+        if (strip) s = strip_html(s);
+        data.assign(s.begin(), s.end());
+    }
+    std::cout << hexify(sha256(data)) << '\n';
+    return 0;
+}
